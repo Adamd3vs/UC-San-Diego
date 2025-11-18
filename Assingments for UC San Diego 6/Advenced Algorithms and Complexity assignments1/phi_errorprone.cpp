@@ -1,29 +1,107 @@
+// phiX174_overlap_errorprone.cpp
+// Assembling phi X174 genome from ERROR-PRONE reads using overlap graph.
+
 #include <bits/stdc++.h>
 using namespace std;
 
-// suffix(a) va prefix(b) orasida, mismatches/len <= 5% shart
-// bajariladigan eng katta overlap uzunligini topamiz.
-int best_overlap_fuzzy(const string& a, const string& b) {
-    int L = (int)a.size();
-    int min_ov = max(1, L / 2); // 100 -> 50
+const double MAX_ERROR_RATE = 0.05; // 5% in overlap
 
-    for (int len = L; len >= min_ov; --len) {
-        int start = L - len;
-        int max_mism = len / 20; // 5% (floor)
+// Approximate overlap: suffix(a) vs prefix(b)
+// returns best length >= min_overlap with error_rate <= max_error
+int approx_overlap(const string &a, const string &b,
+                   int min_overlap,
+                   double max_error_rate) {
+    int n = (int)a.size();
+    int m = (int)b.size();
+    int best = 0;
+
+    for (int len = min_overlap; len <= min(n, m); ++len) {
         int mism = 0;
-        bool ok = true;
-        for (int k = 0; k < len; ++k) {
-            if (a[start + k] != b[k]) {
-                ++mism;
-                if (mism > max_mism) {
-                    ok = false;
-                    break;
-                }
+        for (int i = 0; i < len; ++i) {
+            if (a[n - len + i] != b[i]) mism++;
+        }
+        double err = (double)mism / (double)len;
+        if (err <= max_error_rate) {
+            best = len;
+        }
+    }
+    return best;
+}
+
+// O(n^2) bo'yicha har bir read i uchun eng yaxshi successor j ni tanlaymiz
+void choose_best_successor(const vector<string> &reads,
+                           int min_overlap,
+                           double max_error_rate,
+                           vector<int> &best_to,
+                           vector<int> &best_ov) {
+    int n = (int)reads.size();
+    best_to.assign(n, -1);
+    best_ov.assign(n, 0);
+
+    for (int i = 0; i < n; ++i) {
+        const string &ri = reads[i];
+        for (int j = 0; j < n; ++j) {
+            if (i == j) continue;
+            const string &rj = reads[j];
+
+            int ov = approx_overlap(ri, rj, min_overlap, max_error_rate);
+            if (ov > best_ov[i]) {
+                best_ov[i] = ov;
+                best_to[i] = j;
             }
         }
-        if (ok) return len; // eng katta overlapni topdik
     }
-    return 0;
+}
+
+// Greedy path following successor links
+vector<int> build_greedy_path(const vector<int> &succ) {
+    int n = (int)succ.size();
+    vector<int> indeg(n, 0);
+    for (int i = 0; i < n; ++i) {
+        if (succ[i] != -1) indeg[succ[i]]++;
+    }
+
+    // choose a start: vertex with indegree 0 if any, else 0
+    int start = 0;
+    for (int i = 0; i < n; ++i) {
+        if (indeg[i] == 0) {
+            start = i;
+            break;
+        }
+    }
+
+    vector<int> path;
+    vector<int> used(n, 0);
+
+    int cur = start;
+    while (cur != -1 && !used[cur]) {
+        path.push_back(cur);
+        used[cur] = 1;
+        cur = succ[cur];
+    }
+
+    return path;
+}
+
+// Genome spelling: best_ov dan foydalanamiz, qayta approx_overlap qilmaymiz
+string spell_genome(const vector<string> &reads,
+                    const vector<int> &path,
+                    const vector<int> &best_ov) {
+    if (path.empty()) return "";
+    string genome = reads[path[0]];
+
+    for (size_t k = 1; k < path.size(); ++k) {
+        int u = path[k - 1];
+        int v = path[k];
+
+        int ov = best_ov[u];  // succ[u] bilan overlap
+        if (ov < 0) ov = 0;
+        if (ov > (int)reads[v].size()) ov = (int)reads[v].size();
+
+        genome += reads[v].substr(ov);
+    }
+
+    return genome;
 }
 
 int main() {
@@ -39,78 +117,16 @@ int main() {
 
     if (reads.empty()) return 0;
 
-    int n = (int)reads.size();
-    int L = (int)reads[0].size();
+    int read_len = (int)reads[0].size();
 
-    vector<int> succ(n, -1);
-    vector<int> ovlen(n, 0);
+    // error-prone dataset: minimal overlapni ancha katta qilamiz
+    int MIN_OV = max(1, read_len / 2);  // 100bp bo'lsa → 50
 
-    // Har juftlik uchun eng yaxshi fuzzy overlap
-    for (int i = 0; i < n; ++i) {
-        int bestLen = 0;
-        int bestJ = -1;
-        for (int j = 0; j < n; ++j) {
-            if (i == j) continue;
-            int len = best_overlap_fuzzy(reads[i], reads[j]);
-            if (len > bestLen) {
-                bestLen = len;
-                bestJ = j;
-            }
-        }
-        succ[i] = bestJ;
-        ovlen[i] = bestLen;
-    }
+    vector<int> succ, best_ov;
+    choose_best_successor(reads, MIN_OV, MAX_ERROR_RATE, succ, best_ov);
 
-    // indegree
-    vector<int> indeg(n, 0);
-    for (int i = 0; i < n; ++i) {
-        if (succ[i] != -1)
-            indeg[succ[i]]++;
-    }
-
-    // start vertex
-    int start = 0;
-    for (int i = 0; i < n; ++i) {
-        if (indeg[i] == 0) {
-            start = i;
-            break;
-        }
-    }
-
-    vector<int> order;
-    vector<bool> used(n, false);
-    int cur = start;
-    for (int step = 0; step < n; ++step) {
-        if (used[cur]) break;
-        used[cur] = true;
-        order.push_back(cur);
-        int nxt = succ[cur];
-        if (nxt == -1) break;
-        cur = nxt;
-    }
-
-    // Qolganlarini ham ulab yuboramiz (har ehtimolga qarshi)
-    for (int i = 0; i < n; ++i) {
-        if (!used[i]) {
-            cur = i;
-            while (!used[cur]) {
-                used[cur] = true;
-                order.push_back(cur);
-                int nxt = succ[cur];
-                if (nxt == -1) break;
-                cur = nxt;
-            }
-        }
-    }
-
-    // Superstring
-    string genome = reads[order[0]];
-    for (int k = 1; k < (int)order.size(); ++k) {
-        int prev = order[k - 1];
-        int v = order[k];
-        int len = best_overlap_fuzzy(reads[prev], reads[v]);
-        genome += reads[v].substr(len);
-    }
+    vector<int> path = build_greedy_path(succ);
+    string genome = spell_genome(reads, path, best_ov);
 
     cout << genome << "\n";
     return 0;
