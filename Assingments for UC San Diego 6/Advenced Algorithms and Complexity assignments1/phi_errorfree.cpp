@@ -5,7 +5,7 @@
 using namespace std;
 
 // ====== Settings ======
-const int KMER = 12;       // real datasetda 12, sample uchun avtomatik moslashamiz
+const int KMER = 12;  // real datasetda 12, sample uchun mos ravishda kichraytiramiz
 
 // Map: k-mer -> list of read indices that contain it
 using KmerIndex = unordered_map<string, vector<int>>;
@@ -13,6 +13,8 @@ using KmerIndex = unordered_map<string, vector<int>>;
 // Build index of all k-mers in all reads
 KmerIndex build_kmer_index(const vector<string> &reads, int k) {
     KmerIndex idx;
+    if (k <= 0) return idx;
+
     for (int i = 0; i < (int)reads.size(); ++i) {
         const string &r = reads[i];
         int n = (int)r.size();
@@ -56,7 +58,7 @@ void choose_best_successor(const vector<string> &reads,
     best_to.assign(n, -1);
     best_ov.assign(n, 0);
 
-    // Har bir k-mer uchun shu k-merga ega bo'lgan readlar juftligini tekshiramiz
+    // K-merlar bo'yicha yurib, shu k-merni bo'lishadigan readlar juftligini tekshiramiz
     for (const auto &kv : idx) {
         const auto &vec = kv.second;
         int sz = (int)vec.size();
@@ -70,6 +72,27 @@ void choose_best_successor(const vector<string> &reads,
                 int j = vec[b];
                 const string &rj = reads[j];
 
+                int ov = exact_overlap(ri, rj, min_overlap);
+                if (ov > best_ov[i]) {
+                    best_ov[i] = ov;
+                    best_to[i] = j;
+                }
+            }
+        }
+    }
+
+    // Agar k-mer index hech kimni bog'lamagan bo'lsa (masalan, sample input),
+    // fallback sifatida to'liq O(n^2) overlap hisoblashni qilamiz.
+    bool has_any_edge = false;
+    for (int i = 0; i < n; ++i)
+        if (best_to[i] != -1) { has_any_edge = true; break; }
+
+    if (!has_any_edge) {
+        for (int i = 0; i < n; ++i) {
+            const string &ri = reads[i];
+            for (int j = 0; j < n; ++j) {
+                if (i == j) continue;
+                const string &rj = reads[j];
                 int ov = exact_overlap(ri, rj, min_overlap);
                 if (ov > best_ov[i]) {
                     best_ov[i] = ov;
@@ -145,17 +168,20 @@ int main() {
     if (reads.empty()) return 0;
 
     int read_len = (int)reads[0].size();
-    int kmer = min(KMER, read_len);  // sample: 3, real: 12
+
+    // K-mer uzunligi: sample uchun < read_len bo'lsin (masalan, AAC,ACG...)
+    int kmer;
+    if (read_len <= 1) kmer = 1;
+    else kmer = min(KMER, read_len - 1);   // sample: 3 → kmer=2, dataset: 100 → kmer=12
 
     // Build k-mer index
     KmerIndex idx = build_kmer_index(reads, kmer);
 
-    // Overlap threshold:
-    // sample uchun MIN_OV = 1; real datasetda read_len=100 bo'lsa → 50
-    int MIN_OV = max(1, read_len / 2);
+    // Overlap threshold: statement bo'yicha shart yo'q, shunchaki "max overlap"
+    // MIN_OV = 1 qilsak, ham sample, ham real dataset uchun to'g'ri mantiq.
+    int MIN_OV = 1;
 
     vector<int> succ, best_ov;
-    succ.resize(reads.size());
     choose_best_successor(reads, idx, MIN_OV, succ, best_ov);
 
     vector<int> path = build_greedy_path(succ);
